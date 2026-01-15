@@ -1,0 +1,61 @@
+import pandas as pd
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.metrics import f1_score, accuracy_score
+
+# ===== 1. Load data =====
+file_path = "civ7_coding_sample_JW.xlsx"  # ← Change to your file path
+df = pd.read_excel(file_path)
+df.columns = df.columns.str.strip()  # Remove extra spaces from column names
+
+# ===== 2. Label cleaning and parsing function =====
+def clean_and_parse_labels(x):
+    """
+    Unified label processing:
+    - Remove _x000D_ (carriage return encoding) from pandas reading
+    - Split multiple labels by newlines
+    - Remove extra spaces and quotes
+    - Convert to lowercase
+    - Standardize colon spacing
+    """
+    if pd.isna(x):
+        return []
+    x = str(x).replace("_x000D_", "")
+    labels = [line.strip().strip("'").strip('"').lower() for line in x.splitlines() if line.strip()]
+    # Standardize colon spacing
+    labels = [label.replace(":", ": ") if ":" in label else label for label in labels]
+    return labels
+
+# ===== 3. Apply to each column =====
+human_list = df["HumanLabelsJan(Overlap)"].apply(clean_and_parse_labels)
+bert_list = df["Bert"].apply(clean_and_parse_labels)
+deep_v3_list = df["DeepSeek V3.2"].apply(clean_and_parse_labels)
+deep_r1_list = df["DeepSeek R1-7B"].apply(clean_and_parse_labels)
+
+# ===== 4. MultiLabelBinarizer conversion =====
+mlb = MultiLabelBinarizer()
+Y_human = mlb.fit_transform(human_list)
+Y_bert = mlb.transform(bert_list)
+Y_v3 = mlb.transform(deep_v3_list)
+Y_r1 = mlb.transform(deep_r1_list)
+
+# ===== 5. F1 evaluation function =====
+def evaluate(y_true, y_pred, name):
+    micro_f1 = f1_score(y_true, y_pred, average="micro")
+    macro_f1 = f1_score(y_true, y_pred, average="macro")
+    accuracy = accuracy_score(y_true, y_pred)  # subset accuracy
+    print(f"{name}:")
+    print(f"  Micro-F1  = {micro_f1:.4f}")
+    print(f"  Macro-F1  = {macro_f1:.4f}")
+    print(f"  Accuracy  = {accuracy:.4f}\n")
+
+# ===== 6. Output results =====
+evaluate(Y_human, Y_bert, "BERT")
+evaluate(Y_human, Y_v3, "DeepSeek V3.2")
+evaluate(Y_human, Y_r1, "DeepSeek R1-7B")
+
+# ===== 7. Optional: View sample label parsing results =====
+print("Sample label parsing results (first 5 rows):")
+print("Human:", human_list.head())
+print("BERT:", bert_list.head())
+print("DeepSeek V3.2:", deep_v3_list.head())
+print("DeepSeek R1-7B:", deep_r1_list.head())
