@@ -1,0 +1,211 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# ============================================================
+# 0. Load data
+# ============================================================
+
+file_path = r"C:\Users\52849\[Final]review_analysis_steam.csv"
+df = pd.read_csv(file_path)
+
+df["date"] = pd.to_datetime(df["date"])
+
+# Sentiment to binary
+df["positive_flag"] = df["sentiment"].apply(
+    lambda x: 1 if x == "Positive" else 0
+)
+
+# Day-level aggregation
+df["day"] = pd.to_datetime(df["date"].dt.date)
+
+# ============================================================
+# 1. Patch dates
+# ============================================================
+
+patch_dates_raw = [
+    "7-Feb-2025",
+    "4-Mar-2025",
+    "27-Mar-2025",
+    "22-Apr-2025",
+    "27-May-2025",
+    "23-Jun-2025",
+    "19-Aug-2025",
+    "30-Sep-2025",
+    "4-Nov-2025"
+]
+
+patch_dates = pd.to_datetime(patch_dates_raw)
+
+# ============================================================
+# 2. All Categories — Daily trend
+# ============================================================
+
+categories = df["category"].dropna().unique().tolist()
+
+daily_category = (
+    df.groupby(["category", "day"])
+      .agg(
+          total=("positive_flag", "count"),
+          positive=("positive_flag", "sum")
+      )
+      .reset_index()
+)
+
+# Raw positive ratio
+daily_category["positive_ratio"] = (
+    daily_category["positive"] / daily_category["total"]
+)
+
+# Drop degenerate days (0 or 1)
+daily_category = daily_category[
+    (daily_category["positive_ratio"] > 0) &
+    (daily_category["positive_ratio"] < 1)
+]
+
+# 7-day rolling smooth
+daily_category = daily_category.sort_values("day")
+daily_category["positive_ratio_smooth"] = (
+    daily_category
+    .groupby("category")["positive_ratio"]
+    .rolling(window=7, min_periods=1)
+    .mean()
+    .reset_index(level=0, drop=True)
+)
+
+plt.figure(figsize=(12, 6))
+
+for cat in categories:
+    sub = daily_category[daily_category["category"] == cat]
+    plt.plot(
+        sub["day"],
+        sub["positive_ratio_smooth"],
+        linewidth=2,
+        label=cat
+    )
+
+# Patch lines with legend
+for i, p in enumerate(patch_dates):
+    if i == 0:
+        plt.axvline(
+            p,
+            linestyle="--",
+            alpha=0.4,
+            color="black",
+            label="Game updates (patch releases)"
+        )
+    else:
+        plt.axvline(p, linestyle="--", alpha=0.4, color="black")
+
+# APA style
+plt.xlabel("Date", fontsize=11)
+plt.ylabel("Positive rating", fontsize=11)
+plt.xticks(fontsize=10)
+plt.yticks(fontsize=10)
+plt.ylim(0, 1)
+plt.grid(True, alpha=0.3)
+plt.legend(fontsize=9, frameon=False)
+
+plt.tight_layout()
+plt.savefig(
+    "Figure_1_daily_positive_ratio_by_category.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+plt.show()
+
+# ============================================================
+# 3. Each Category — Top 5 Labels
+# ============================================================
+
+for cat in categories:
+    print(f"Processing category: {cat}")
+
+    df_cat = df[df["category"] == cat].copy()
+
+    # Remove "No Label"
+    df_cat = df_cat[df_cat["label"] != "No Label"]
+
+    # Top 5 labels
+    top_labels = (
+        df_cat["label"]
+        .value_counts()
+        .head(5)
+        .index
+        .tolist()
+    )
+
+    df_cat_top = df_cat[df_cat["label"].isin(top_labels)]
+
+    daily_label = (
+        df_cat_top
+        .groupby(["label", "day"])
+        .agg(
+            total=("positive_flag", "count"),
+            positive=("positive_flag", "sum")
+        )
+        .reset_index()
+    )
+
+    # Raw positive ratio
+    daily_label["positive_ratio"] = (
+        daily_label["positive"] / daily_label["total"]
+    )
+
+    # Drop degenerate days (0 or 1)
+    daily_label = daily_label[
+        (daily_label["positive_ratio"] > 0) &
+        (daily_label["positive_ratio"] < 1)
+    ]
+
+    # 7-day rolling smooth
+    daily_label = daily_label.sort_values("day")
+    daily_label["positive_ratio_smooth"] = (
+        daily_label
+        .groupby("label")["positive_ratio"]
+        .rolling(window=7, min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+
+    plt.figure(figsize=(12, 6))
+
+    for label in top_labels:
+        sub = daily_label[daily_label["label"] == label]
+        plt.plot(
+            sub["day"],
+            sub["positive_ratio_smooth"],
+            label=label,
+            alpha=0.9
+        )
+
+    # Patch lines with legend
+    for i, p in enumerate(patch_dates):
+        if i == 0:
+            plt.axvline(
+                p,
+                linestyle="--",
+                alpha=0.4,
+                color="black",
+                label="Game updates (patch releases)"
+            )
+        else:
+            plt.axvline(p, linestyle="--", alpha=0.4, color="black")
+
+    # APA style
+    plt.xlabel("Date", fontsize=11)
+    plt.ylabel("Positive rating", fontsize=11)
+    plt.xticks(fontsize=10)
+    plt.yticks(fontsize=10)
+    plt.ylim(0, 1)
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=9, frameon=False)
+
+    plt.tight_layout()
+    plt.savefig(
+        f"Figure_A_{cat}_top_labels_daily.png",
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.show()
+
+print("DONE ✅ Degenerate 0/1 days removed; APA-style figures generated.")
