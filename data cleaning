@@ -1,0 +1,73 @@
+import re
+import pandas as pd
+import csv 
+
+# Helper function: Convert Roman numerals I~VII to Arabic numerals
+def roman_to_int(roman):
+    roman_map = {'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5, 'vi': 6, 'vii': 7}
+    return roman_map.get(roman.lower(), roman)  # Return original if not found
+
+def clean_review(text):
+    if pd.isna(text):
+        return ""
+
+    # 1. Convert to lowercase
+    text = text.lower()
+
+    # 2. Remove URLs
+    text = re.sub(r'http\S+|www\.\S+', ' <url> ', text)
+
+    # 3. Remove HTML tags
+    text = re.sub(r'<.*?>', ' ', text)
+
+    # 4. Remove Steam user @mentions and player names
+    text = re.sub(r'@\w+', ' <user> ', text)
+
+    # 5. Remove game logs / control characters (e.g., \n\r\t, etc.)
+    text = re.sub(r'[\r\n\t]+', ' ', text)
+
+    # 6. Remove truly noisy symbols (do not preserve emoji)
+    text = re.sub(r"[^a-z0-9\s\.\,\!\?\'\"\:\;\-\(\)\[\]\$\€\£\¥]+", " ", text)
+
+    # 7. Unify Civilization game names to full name (Civilization 1~8)
+    def _roman_to_int(roman):
+        roman_map = {'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5, 'vi': 6, 'vii': 7, 'viii': 8}
+        return roman_map.get(roman.lower(), roman)
+
+    # Match standalone civ + Arabic or Roman numerals (1~8/I~VIII)
+    text = re.sub(
+        r'\bciv\b\s*0*(i{1,3}|iv|v|vi|vii|viii|[1-8])?\b',
+        lambda m: " civilization " + (str(_roman_to_int(m.group(1))) if m.group(1) else ""),
+        text,
+        flags=re.IGNORECASE
+    )
+    
+    # 8. Compress multiple spaces into single space
+    text = re.sub(r'\s+', ' ', text)
+
+    # 9. Remove leading and trailing spaces
+    text = text.strip()
+
+    # Remove non-standard ASCII characters (replace with space)
+    text = re.sub(r'[^\x00-\x7F]+', ' ', text)
+
+    # Replace all newlines with space
+    text = re.sub(r'[\r\n]+', ' ', text)
+
+    return text
+
+
+# === Usage Example ===
+
+file_path = r'C:\Users\52849\To DeepSeek Multi-Label No Cleaning.xlsx'
+df = pd.read_excel(file_path)
+
+df["clean_text"] = df["review_text"].apply(clean_review)
+
+df[["review_text", "clean_text"]].head()
+
+# Save to new Excel file
+output_path = r'C:\Users\52849\To DeepSeek Multi-Label Cleaning.xlsx'
+df.to_excel(output_path, index=False)
+
+print(f"Saved to {output_path}")
