@@ -1,0 +1,52 @@
+import steamreviews
+import pandas as pd
+
+# Select the App ID of the game to fetch
+appid = 1295660   # Civilization VII
+
+# Set request parameters
+request_params = {
+    'language': 'english',     # Only fetch English reviews
+    'purchase_type': 'all'     # All sources (including all versions/gift packages)
+}
+
+# Fetch reviews
+review_dict, query_count = steamreviews.download_reviews_for_app_id(
+    appid,
+    chosen_request_params=request_params
+)
+
+print(f"Fetched {len(review_dict['reviews'])} reviews with {query_count} queries.")
+
+# Convert to DataFrame
+reviews = []
+for rid, rev in review_dict['reviews'].items():
+    author = rev.get("author", {})
+    reviews.append({
+        "review_id": rid,
+        "review_text": rev.get("review"),
+        "voted_up": rev.get("voted_up"),
+        "votes_up": rev.get("votes_up"),
+        "votes_funny": rev.get("votes_funny"),
+        "comment_count": rev.get("comment_count"),
+        "timestamp_created": rev.get("timestamp_created"),
+        "timestamp_updated": rev.get("timestamp_updated"),
+        "author_steamid": author.get("steamid"),
+        "author_num_games_owned": author.get("num_games_owned"),
+        "playtime_at_review": author.get("playtime_at_review"),
+        "playtime_forever": author.get("playtime_forever"),
+        "language": rev.get("language"),
+    })
+
+df = pd.DataFrame(reviews)
+
+# Remove duplicates (by review_id)
+df = df.drop_duplicates(subset=["review_id"])
+
+# Convert timestamps to readable dates
+df["created_datetime"] = pd.to_datetime(df["timestamp_created"], unit="s")
+df["updated_datetime"] = pd.to_datetime(df["timestamp_updated"], unit="s")
+
+# Save to CSV
+df.to_csv("civ7_reviews1111.csv", index=False, encoding="utf-8-sig")
+print(f"Saved {len(df)} unique reviews to civ7_reviews.csv")
