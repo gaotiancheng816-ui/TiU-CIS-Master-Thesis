@@ -37,7 +37,14 @@ patch_dates_raw = [
 patch_dates = pd.to_datetime(patch_dates_raw)
 
 # ============================================================
-# 2. All Categories — Daily trend
+# Jeffreys Bayesian smoothing (weak prior)
+# ============================================================
+
+alpha = 0.25
+beta = 0.25
+
+# ============================================================
+# 2. All Categories — Daily trend (APA style)
 # ============================================================
 
 categories = df["category"].dropna().unique().tolist()
@@ -51,16 +58,11 @@ daily_category = (
       .reset_index()
 )
 
-# Raw positive ratio
+# Bayesian-smoothed positive ratio
 daily_category["positive_ratio"] = (
-    daily_category["positive"] / daily_category["total"]
+    (daily_category["positive"] + alpha) /
+    (daily_category["total"] + alpha + beta)
 )
-
-# Drop degenerate days (0 or 1)
-daily_category = daily_category[
-    (daily_category["positive_ratio"] > 0) &
-    (daily_category["positive_ratio"] < 1)
-]
 
 # 7-day rolling smooth
 daily_category = daily_category.sort_values("day")
@@ -91,14 +93,14 @@ for i, p in enumerate(patch_dates):
             linestyle="--",
             alpha=0.4,
             color="black",
-            label="Game updates (patch releases)"
+            label="Game update (patch release)"
         )
     else:
         plt.axvline(p, linestyle="--", alpha=0.4, color="black")
 
 # APA style
 plt.xlabel("Date", fontsize=11)
-plt.ylabel("Positive rating", fontsize=11)
+plt.ylabel("Positive Rating", fontsize=11)
 plt.xticks(fontsize=10)
 plt.yticks(fontsize=10)
 plt.ylim(0, 1)
@@ -114,7 +116,7 @@ plt.savefig(
 plt.show()
 
 # ============================================================
-# 3. Each Category — Top 5 Labels
+# 3. Each Category — Top 5 Labels (No Label removed)
 # ============================================================
 
 for cat in categories:
@@ -146,16 +148,11 @@ for cat in categories:
         .reset_index()
     )
 
-    # Raw positive ratio
+    # Bayesian-smoothed positive ratio
     daily_label["positive_ratio"] = (
-        daily_label["positive"] / daily_label["total"]
+        (daily_label["positive"] + alpha) /
+        (daily_label["total"] + alpha + beta)
     )
-
-    # Drop degenerate days (0 or 1)
-    daily_label = daily_label[
-        (daily_label["positive_ratio"] > 0) &
-        (daily_label["positive_ratio"] < 1)
-    ]
 
     # 7-day rolling smooth
     daily_label = daily_label.sort_values("day")
@@ -186,14 +183,14 @@ for cat in categories:
                 linestyle="--",
                 alpha=0.4,
                 color="black",
-                label="Game updates (patch releases)"
+                label="Game update (patch release)"
             )
         else:
             plt.axvline(p, linestyle="--", alpha=0.4, color="black")
 
     # APA style
     plt.xlabel("Date", fontsize=11)
-    plt.ylabel("Positive rating", fontsize=11)
+    plt.ylabel("Positive Rating", fontsize=11)
     plt.xticks(fontsize=10)
     plt.yticks(fontsize=10)
     plt.ylim(0, 1)
@@ -208,4 +205,4 @@ for cat in categories:
     )
     plt.show()
 
-print("DONE ✅ Degenerate 0/1 days removed; APA-style figures generated.")
+print("DONE ✅ All APA-style figures generated and saved.")
