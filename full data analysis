@@ -1,0 +1,394 @@
+import sys
+!{sys.executable} -m pip install requests pandas python-dotenv
+import requests
+import json
+import pandas as pd
+from typing import List, Dict, Any
+import time
+import os
+from datetime import datetime
+
+class DeepSeekReviewAnalyzer:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        if not self.api_key:
+            raise ValueError("Please provide DeepSeek API key")
+        
+        self.base_url = "https://api.deepseek.com/chat/completions"
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        # Monitoring statistics
+        self.monitoring_stats = {
+            "total_api_calls": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_tokens": 0,
+            "successful_calls": 0,
+            "failed_calls": 0,
+            "start_time": None,
+            "cost_estimate": 0.0
+        }
+
+        # Label frequency
+        self.label_frequency: Dict[str, int] = {}
+
+        # Initial labels
+        self.initial_labels = [
+            "Content::Civilization & Faction Design",
+            "Content::Game Completeness",
+            "Content::Leader & Legacy Design",
+            "Content::Map Design",
+            "Content::Unit Design",
+            "Mechanics::Artificial Intelligence & Behavior",
+            "Mechanics::City Management",
+            "Mechanics::Diplomacy & Influence System",
+            "Mechanics::Era (Age) System",
+            "Mechanics::Game Balance & Progression",
+            "Mechanics::Religion System",
+            "Mechanics::Strategic Depth",
+            "Mechanics::Trade Management",
+            "Mechanics::Victory Conditions & Goals",
+            "Mechanics::Warfare System",
+            "Aesthetics::Art & Graphics Design",
+            "Aesthetics::User Interface",
+            "Aesthetics::Soundtrack & Audio Design",
+            "Narrative::Historical Representation & Authenticity",
+            "Framing::Patch Updates & Bug Fixes",
+            "Framing::Downloadable Content (DLC) & Expansions",
+            "Framing::Pricing & Purchase Model",
+            "Framing::Multiplayer & Online Experience",
+            "Framing::Series Faithfulness",
+            "Player Experience::Challenge & Difficulty",
+            "Player Experience::Engagement & Immersion",
+            "Player Experience::Enjoyment & Fun",
+            "Player Experience::Gameplay Usability & Accessibility",
+            "Player Experience::Novelty & Discoverability",
+            "Player Experience::Recommendation & Value",
+            "Player Experience::Replayability"
+        ]
+
+        self._test_api_connection()
+
+    def _test_api_connection(self):
+        test_payload = {
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 5,
+            "temperature": 0.1
+        }
+        try:
+            response = requests.post(self.base_url, headers=self.headers, json=test_payload, timeout=10)
+            if response.status_code == 200:
+                print("✓ API connection successful")
+                return True
+            elif response.status_code == 404:
+                self.base_url = "https://api.deepseek.com/v1/chat/completions"
+                response = requests.post(self.base_url, headers=self.headers, json=test_payload, timeout=10)
+                if response.status_code == 200:
+                    print("✓ Backup API endpoint connected successfully")
+                    return True
+                else:
+                    print(f"✗ API connection failed: {response.status_code}")
+                    return False
+            else:
+                print(f"✗ API connection failed: {response.status_code} - {response.text}")
+                return False
+        except Exception as e:
+            print(f"✗ API connection exception: {e}")
+            return False
+
+    def _calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        input_cost = (input_tokens / 1000000) * 2.0
+        output_cost = (output_tokens / 1000000) * 6.0
+        return input_cost + output_cost
+
+    def _update_monitoring_stats(self, usage_data: Dict[str, int], success: bool = True):
+        self.monitoring_stats["total_api_calls"] += 1
+        self.monitoring_stats["total_input_tokens"] += usage_data.get("prompt_tokens", 0)
+        self.monitoring_stats["total_output_tokens"] += usage_data.get("completion_tokens", 0)
+        self.monitoring_stats["total_tokens"] += usage_data.get("total_tokens", 0)
+        if success:
+            self.monitoring_stats["successful_calls"] += 1
+        else:
+            self.monitoring_stats["failed_calls"] += 1
+        self.monitoring_stats["cost_estimate"] = self._calculate_cost(
+            self.monitoring_stats["total_input_tokens"],
+            self.monitoring_stats["total_output_tokens"]
+        )
+
+    def print_monitoring_report(self):
+        elapsed_time = 0
+        if self.monitoring_stats["start_time"]:
+            elapsed_time = time.time() - self.monitoring_stats["start_time"]
+        hours, remainder = divmod(int(elapsed_time), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        detected_dynamic_count = len([label for label in self.label_frequency.keys() if self.is_dynamic_label(label)])
+        print("\n" + "="*60)
+        print("📊 API Usage Monitoring Report")
+        print("="*60)
+        print(f"Total API calls: {self.monitoring_stats['total_api_calls']}")
+        print(f"Successful calls: {self.monitoring_stats['successful_calls']}")
+        print(f"Failed calls: {self.monitoring_stats['failed_calls']}")
+        print(f"Input tokens: {self.monitoring_stats['total_input_tokens']:,}")
+        print(f"Output tokens: {self.monitoring_stats['total_output_tokens']:,}")
+        print(f"Total tokens: {self.monitoring_stats['total_tokens']:,}")
+        print(f"Estimated cost: ¥{self.monitoring_stats['cost_estimate']:.2f}")
+        print(f"Initial labels: {len(self.initial_labels)}")
+        print(f"Detected dynamic labels: {detected_dynamic_count}")
+        print(f"Runtime: {hours:02d}:{minutes:02d}:{seconds:02d}")
+        print("="*60)
+
+    def save_monitoring_report(self, filename: str = "api_monitoring_report.json"):
+        detected_dynamic_count = len([label for label in self.label_frequency.keys() if self.is_dynamic_label(label)])
+        report = {
+            "monitoring_stats": self.monitoring_stats,
+            "generated_time": datetime.now().isoformat(),
+            "detected_dynamic_labels_count": detected_dynamic_count,
+            "initial_labels_count": len(self.initial_labels),
+            "label_frequency": self.label_frequency
+        }
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        print(f"📋 Monitoring report saved to {filename}")
+
+    def is_dynamic_label(self, label_name: str) -> bool:
+        return (label_name not in self.initial_labels and 
+                "::" in label_name and
+                any(category in label_name for category in ["Content", "Mechanics", "Aesthetics", "Narrative", "Framing", "Player Experience"]))
+
+    def get_current_labels_list(self) -> List[str]:
+        return self.initial_labels
+
+    def update_labels_from_response(self, parsed_result: Dict[str, Any]):
+        for review_id, labels_dict in parsed_result.items():
+            for label in labels_dict.keys():
+                self.label_frequency[label] = self.label_frequency.get(label, 0) + 1
+
+    # analyze_review keeps original prompt
+    def analyze_review(self, review_id: str, review_text: str) -> Dict[str, Any]:
+        if not review_text or pd.isna(review_text):
+            return {review_id: {}}
+        if len(review_text) > 3000:
+            review_text = review_text[:3000] + "...[Text truncated due to length]"
+        current_labels = self.get_current_labels_list()
+        labels_text = "\n- ".join([""] + current_labels)
+        prompt = f"""
+You are a game analyst for the game Civilization 7. In order to understand players' perceptions of the game and improve game quality,
+you need to analyze this Steam game reviews:
+
+"{review_text}"
+
+Available Labels:
+{labels_text}
+
+Instructions:
+1. Identify ALL relevant existing labels. A label includes a primary category and a subcategory. For example: "Content::Map Design"
+2. If none of the existing labels match a review aspect, create a new label as a **subcategory only**, under the most appropriate existing **primary category**.
+3. Do NOT create any new primary category.
+4. Extract exact sentences for each label.
+5. Classify sentiment as Positive or Negative.
+6. Output STRICTLY as valid JSON.
+
+Example of new subcategory: "Mechanics::NewAspect
+Invalid example (do not create): "NewCategory::NewAspect"
+
+Output Format:
+{{
+  "{review_id}": {{
+    "PrimaryCategory::Subcategory": {{
+      "sentences": "exact quote from review",
+      "sentiment": "Positive"
+    }}
+  }}
+}}
+"""
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": "You are a precise game review analyst. Follow these rules STRICTLY:\n1. Output only valid JSON\n2. Create new subcategories when needed\n3. Extract exact quotes\n4. Classify sentiment as Positive or Negative only"},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.1,
+            "max_tokens": 2000,
+            "top_p": 0.9
+        }
+        try:
+            response = requests.post(self.base_url, headers=self.headers, json=payload, timeout=60)
+            response.raise_for_status()
+            result = response.json()
+            usage = result.get('usage', {})
+            self._update_monitoring_stats(usage, success=True)
+            analysis_text = result['choices'][0]['message']['content'].strip()
+            analysis_text = analysis_text.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")
+            if analysis_text.startswith('```json'):
+                analysis_text = analysis_text[7:]
+            if analysis_text.endswith('```'):
+                analysis_text = analysis_text[:-3]
+            analysis_text = analysis_text.strip()
+            json_start = analysis_text.find('{')
+            json_end = analysis_text.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                try:
+                    parsed_result = json.loads(analysis_text[json_start:json_end])
+                    self.update_labels_from_response(parsed_result)
+                    return parsed_result
+                except json.JSONDecodeError:
+                    self._update_monitoring_stats({}, success=False)
+                    return {review_id: {}}
+            else:
+                self._update_monitoring_stats({}, success=False)
+                return {review_id: {}}
+        except Exception as e:
+            print(f"\n❌ API call exception: {e}")
+            self._update_monitoring_stats({}, success=False)
+            return {review_id: {}}
+
+    # Batch analysis of reviews
+    def analyze_reviews_batch(self, reviews_data: List[Dict], batch_size: int = 20, delay: float = 1.0) -> Dict[str, Any]:
+        self.monitoring_stats["start_time"] = time.time()
+        all_results = {}
+        start_time = time.time()
+        successful_reviews = 0
+        failed_reviews = 0
+        checkpoint_file = "checkpoint_progress.json"
+        frequency_file = "label_frequency_checkpoint.json"
+        monitoring_file = "monitoring_checkpoint.json"
+        csv_file = "review_analysis_stream.csv"
+        start_index = 0
+        total_reviews = len(reviews_data)
+        if os.path.exists(checkpoint_file):
+            with open(checkpoint_file, 'r', encoding='utf-8') as f:
+                checkpoint_data = json.load(f)
+                start_index = checkpoint_data.get("last_index", 0)
+            print(f"⏯️ Found checkpoint, continuing from record {start_index}")
+        if os.path.exists(frequency_file):
+            with open(frequency_file, 'r', encoding='utf-8') as f:
+                self.label_frequency = json.load(f)
+            detected_dynamic_count = len([label for label in self.label_frequency.keys() if self.is_dynamic_label(label)])
+            print(f"📊 Loaded label frequency data, detected {detected_dynamic_count} dynamic labels")
+        if os.path.exists(monitoring_file):
+            with open(monitoring_file, 'r', encoding='utf-8') as f:
+                saved_monitoring = json.load(f)
+                self.monitoring_stats.update(saved_monitoring)
+            print(f"📊 Loaded monitoring checkpoint, tokens used: {self.monitoring_stats['total_tokens']:,}")
+        rows_buffer = []
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        for i, review in enumerate(reviews_data[start_index:], start=start_index):
+            review_id = str(review.get('review_id', f"review_{i}"))
+            review_text = review.get('review_text', '')
+            analysis_result = self.analyze_review(review_id, review_text)
+            if analysis_result.get(review_id) is not None:
+                consecutive_errors = 0
+                if analysis_result[review_id]:
+                    successful_reviews += 1
+                else:
+                    failed_reviews += 1
+            else:
+                consecutive_errors += 1
+                failed_reviews += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    print("🚨 Too many consecutive errors, waiting 10s for protection")
+                    time.sleep(10)
+                    consecutive_errors = 0
+            all_results.update(analysis_result)
+            # Write to CSV buffer
+            if analysis_result.get(review_id):
+                for label, data in analysis_result[review_id].items():
+                    rows_buffer.append({
+                        'review_id': review_id,
+                        'label': label,
+                        'sentences': data.get('sentences', ''),
+                        'sentiment': data.get('sentiment', ''),
+                        'label_type': 'dynamic' if self.is_dynamic_label(label) else 'initial'
+                    })
+            else:
+                rows_buffer.append({
+                    'review_id': review_id,
+                    'label': 'No Label',
+                    'sentences': '',
+                    'sentiment': '',
+                    'label_type': 'none'
+                })
+            # Flush CSV + checkpoint every 100 records
+            if (i + 1) % 100 == 0 or (i + 1) == total_reviews:
+                df_chunk = pd.DataFrame(rows_buffer)
+                df_chunk.to_csv(csv_file, mode='a', header=not os.path.exists(csv_file), index=False, encoding='utf-8-sig')
+                rows_buffer = []
+                with open(checkpoint_file, 'w', encoding='utf-8') as f:
+                    json.dump({"last_index": i + 1}, f)
+                with open(frequency_file, 'w', encoding='utf-8') as f:
+                    json.dump(self.label_frequency, f)
+                with open(monitoring_file, 'w', encoding='utf-8') as f:
+                    json.dump(self.monitoring_stats, f)
+                detected_dynamic_count = len([label for label in self.label_frequency.keys() if self.is_dynamic_label(label)])
+                print(f"\n📈 Progress: {i + 1}/{total_reviews} | Dynamic labels: {detected_dynamic_count} | Cost: ¥{self.monitoring_stats['cost_estimate']:.2f}")
+            percent = (i + 1) / total_reviews * 100
+            elapsed = time.time() - start_time
+            avg_time_per_review = elapsed / (i - start_index + 1)
+            remaining = total_reviews - (i + 1)
+            eta = remaining * avg_time_per_review
+            eta_min, eta_sec = divmod(int(eta), 60)
+            detected_dynamic_count = len([label for label in self.label_frequency.keys() if self.is_dynamic_label(label)])
+            print(f"\r📊 Progress: {i + 1}/{total_reviews} ({percent:.2f}%) | ETA: {eta_min}m {eta_sec}s | Tokens: {self.monitoring_stats['total_tokens']:,} | Cost: ¥{self.monitoring_stats['cost_estimate']:.2f} | Dynamic labels: {detected_dynamic_count}", end='')
+            if (i + 1) % batch_size == 0 and (i + 1) < total_reviews:
+                time.sleep(delay)
+        print("\n\n💾 Batch analysis complete, CSV + checkpoint saved.")
+        self.print_monitoring_report()
+        self.save_monitoring_report()
+        return all_results
+
+    def save_labels_report(self, output_file: str = "labels_report.json"):
+        detected_dynamic_count = len([label for label in self.label_frequency.keys() if self.is_dynamic_label(label)])
+        labels_report = {
+            "initial_labels": self.initial_labels,
+            "detected_dynamic_labels_count": detected_dynamic_count,
+            "most_frequent_dynamic_labels": dict(sorted({k: v for k, v in self.label_frequency.items() if self.is_dynamic_label(k)}.items(), key=lambda x: x[1], reverse=True)[:20]),
+            "total_initial_labels": len(self.initial_labels),
+            "generated_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "monitoring_stats": self.monitoring_stats,
+            "label_frequency_summary": f"Detected {detected_dynamic_count} dynamic labels in total"
+        }
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(labels_report, f, ensure_ascii=False, indent=2)
+        print(f"📋 Label report saved to {output_file}")
+
+def main():
+    # API Key directly in code
+    api_key = "sk-d6e4f16871484edc8480ac3782e4047b"
+    analyzer = DeepSeekReviewAnalyzer(api_key=api_key)
+    
+    # Read review data
+    try:
+        df = pd.read_csv("rest.csv")
+        print(f"✅ Successfully loaded {len(df)} reviews")
+    except Exception as e:
+        print(f"❌ Failed to read file: {e}")
+        return
+
+    reviews_data = df.to_dict('records')
+    
+    print(f"\n🚀 Starting analysis of {len(reviews_data)} reviews...")
+    print("🔍 Intelligent label detection enabled: LLM can create new labels but won't record to label list")
+    
+    # Batch analysis of reviews
+    results = analyzer.analyze_reviews_batch(reviews_data, batch_size=100, delay=0)
+    
+    # Save label usage report
+    analyzer.save_labels_report("labels_usage_report.json")
+    
+    print("\n✅ All analysis complete! Generated files:")
+    print("  - review_analysis_stream.csv (analysis results)")
+    print("  - labels_usage_report.json (labels report)")
+    print("  - checkpoint_progress.json (progress checkpoint)")
+    print("  - label_frequency_checkpoint.json (label frequency)")
+    print("  - monitoring_checkpoint.json (monitoring checkpoint)")
+    print("  - api_monitoring_report.json (detailed monitoring report)")
+
+
+
+if __name__ == "__main__":
+    main()
