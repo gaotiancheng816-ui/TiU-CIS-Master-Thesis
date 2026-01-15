@@ -1,0 +1,47 @@
+import pandas as pd
+from sklearn.metrics import cohen_kappa_score
+import numpy as np
+
+df = pd.read_excel("sentiment coding.xlsx")
+
+# --- Step 1: Parse Excel cells (newline-separated labels) ---
+def parse_multiline_labels(cell):
+    if pd.isna(cell):
+        return []
+    # Split by newline, clean whitespace, and remove duplicates
+    labels = [x.strip() for x in str(cell).split("\n") if x.strip() != ""]
+    return list(set(labels))  # Remove duplicates
+
+df["tian"] = df["Tiancheng"].apply(parse_multiline_labels)
+df["jan"]  = df["Jan"].apply(parse_multiline_labels)
+
+# --- Step 2: Build the complete label set ---
+all_labels = set()
+df["tian"].apply(lambda x: all_labels.update(x))
+df["jan"].apply(lambda x: all_labels.update(x))
+all_labels = sorted(list(all_labels))
+
+# --- Step 3: Multi-hot encoding ---
+def multi_hot(tags, label_space):
+    return [1 if label in tags else 0 for label in label_space]
+
+df["mh_tian"] = df["tian"].apply(lambda x: multi_hot(x, all_labels))
+df["mh_jan"]  = df["jan"].apply(lambda x: multi_hot(x, all_labels))
+
+mh_tian = np.vstack(df["mh_tian"].values)
+mh_jan  = np.vstack(df["mh_jan"].values)
+
+# --- Step 4: Calculate Cohen's Kappa per label ---
+kappa_per_label = {}
+
+for i, label in enumerate(all_labels):
+    k = cohen_kappa_score(mh_tian[:, i], mh_jan[:, i])
+    kappa_per_label[label] = k
+
+# Print results
+print("Cohen's Kappa per label:")
+for label, k in kappa_per_label.items():
+    print(f"{label}: {k:.4f}")
+
+avg_kappa = sum(kappa_per_label.values()) / len(kappa_per_label)
+print("\nAverage Kappa:", avg_kappa)
