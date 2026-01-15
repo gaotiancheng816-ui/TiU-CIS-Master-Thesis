@@ -1,0 +1,329 @@
+import pandas as pd
+import numpy as np
+import torch
+from transformers import BertTokenizer, BertModel
+import warnings
+warnings.filterwarnings('ignore')
+
+# Label list
+LABELS = [
+    "Content::Civilization & Faction Design",
+    "Content::Game Completeness",
+    "Content::Leader & Legacy Design",
+    "Content::Map Design",
+    "Content::Unit Design",
+    "Mechanics::Artificial Intelligence & Behavior",
+    "Mechanics::City Management",
+    "Mechanics::Diplomacy & Influence System",
+    "Mechanics::Era (Age) System",
+    "Mechanics::Game Balance & Progression",
+    "Mechanics::Religion System",
+    "Mechanics::Strategic Depth",
+    "Mechanics::Trade Management",
+    "Mechanics::Victory Conditions & Goals",
+    "Mechanics::Warfare System",
+    "Aesthetics::Art & Graphics Design",
+    "Aesthetics::User Interface",
+    "Aesthetics::Soundtrack & Audio Design",
+    "Narrative::Historical Representation & Authenticity",
+    "Framing::Patch Updates & Bug Fixes",
+    "Framing::Downloadable Content (DLC) & Expansions",
+    "Framing::Pricing & Purchase Model",
+    "Framing::Multiplayer & Online Experience",
+    "Framing::Series Faithfulness",
+    "Player Experience::Challenge & Difficulty",
+    "Player Experience::Engagement & Immersion",
+    "Player Experience::Enjoyment & Fun",
+    "Player Experience::Gameplay Usability & Accessibility",
+    "Player Experience::Novelty & Discoverability",
+    "Player Experience::Recommendation & Value",
+    "Player Experience::Replayability"
+]
+
+class SimpleBertClassifier:
+    def __init__(self):
+        print("Loading BERT model...")
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.model = BertModel.from_pretrained('bert-base-uncased')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model.to(self.device)
+        self.model.eval()
+        
+        print("Computing label vectors...")
+        self.label_vectors = {}
+        for label in LABELS:
+            inputs = self.tokenizer(label, return_tensors='pt', padding=True, truncation=True, max_length=32)
+            with torch.no_grad():
+                outputs = self.model(**{k: v.to(self.device) for k, v in inputs.items()})
+                vector = outputs.last_hidden_state[:, 0, :].cpu().numpy()[0]
+                # Normalize
+                norm = np.linalg.norm(vector)
+                if norm > 0:
+                    vector = vector / norm
+                self.label_vectors[label] = vector
+        print("✅ Preparation complete")
+    
+    def predict(self, text, threshold=0.75):
+        """
+        Predict labels - simplest version
+        
+        Parameters:
+        - threshold: Threshold value, labels with similarity >= this value are selected
+                  Recommended range: 0.70-0.85
+        """
+        # Process text
+        text = str(text).strip()
+        if not text or text.lower() == 'nan':
+            return [], []
+        
+        # Get text vector
+        inputs = self.tokenizer(text, return_tensors='pt', padding=True, truncation=True, max_length=256)
+        with torch.no_grad():
+            outputs = self.model(**{k: v.to(self.device) for k, v in inputs.items()})
+            text_vector = outputs.last_hidden_state[:, 0, :].cpu().numpy()[0]
+        
+        # Normalize text vector
+        norm = np.linalg.norm(text_vector)
+        if norm > 0:
+            text_vector = text_vector / norm
+        
+        # Calculate similarity
+        results = []
+        for label, label_vector in self.label_vectors.items():
+            # Calculate cosine similarity (vectors already normalized, direct dot product)
+            similarity = np.dot(text_vector, label_vector)
+            results.append((label, similarity))
+        
+        # Sort by similarity
+        results.sort(key=lambda x: x[1], reverse=True)
+        
+        # Select labels that meet threshold
+        selected = [(label, score) for label, score in results if score >= threshold]
+        
+        # Separate labels and scores
+        labels = [item[0] for item in selected]
+        scores = [float(item[1]) for item in selected]
+        
+        return labels, scores
+
+def test_threshold_effect(classifier, sample_texts):
+    """Test effect of different thresholds"""
+    print("\n" + "="*60)
+    print("Threshold Effect Test")
+    print("="*60)
+    
+    thresholds = [0.70, 0.73, 0.75, 0.78, 0.80, 0.83, 0.85]
+    
+    print("Average number of labels at different thresholds:")
+    print("-"*40)
+    
+    threshold_stats = {}
+    for thresh in thresholds:
+        total_labels = 0
+        for text in sample_texts:
+            labels, _ = classifier.predict(text, threshold=thresh)
+            total_labels += len(labels)
+        
+        avg_labels = total_labels / len(sample_texts)
+        threshold_stats[thresh] = avg_labels
+        print(f"Threshold {thresh:.2f}: Average {avg_labels:.2f} labels")
+    
+    return threshold_stats
+
+def show_example_predictions(classifier, examples, threshold):
+    """Show example predictions"""
+    print(f"\nExample Predictions (threshold={threshold}):")
+    print("-"*60)
+    
+    for i, text in enumerate(examples, 1):
+        labels, scores = classifier.predict(text, threshold=threshold)
+        print(f"\nExample {i}:")
+        print(f"Text: {text[:60]}...")
+        print(f"Predicted {len(labels)} labels:")
+        for label, score in zip(labels, scores):
+            # Shorten label display
+            short_label = label.split("::")[-1][:30]
+            print(f"  - {short_label:<30} ({score:.3f})")
+    
+    print("\n💡 Label count reference:")
+    print("  0-1 labels: Threshold may be too high")
+    print("  2-4 labels: Seems appropriate")
+    print("  5+ labels: Threshold may be too low")
+
+def main():
+    print("BERT Multi-Label Classification - Manual Threshold Tuning Version")
+    print("="*60)
+    
+    # 1. Load data
+    try:
+        df = pd.read_csv('To DeepSeek Multi-Label Cleaning.csv')
+        print(f"✅ Successfully loaded {len(df)} records")
+        
+        if 'clean_text' not in df.columns:
+            text_cols = [col for col in df.columns if 'text' in col.lower()]
+            if text_cols:
+                df['clean_text'] = df[text_cols[0]]
+                print(f"Using column: {text_cols[0]}")
+            else:
+                print("❌ Cannot find text column")
+                return
+    except Exception as e:
+        print(f"❌ Failed to load file: {e}")
+        print("Creating sample data...")
+        df = pd.DataFrame({
+            'clean_text': [
+                "Beautiful game graphics, great music, but AI is not very smart, price is a bit high",
+                "Multiplayer mode is fun, interesting map design, user interface needs improvement",
+                "Unique civilization design, balanced combat system, highly recommended",
+                "Too many bugs need fixing, DLC pricing is unreasonable",
+                "Friendly tutorial for beginners, easy to learn, great music"
+            ]
+        })
+    
+    # 2. Initialize classifier
+    classifier = SimpleBertClassifier()
+    
+    # 3. Get sample texts for testing
+    sample_texts = df['clean_text'].dropna().astype(str).tolist()[:10]
+    
+    # 4. Test effect of different thresholds
+    threshold_stats = test_threshold_effect(classifier, sample_texts)
+    
+    # 5. Let user select threshold
+    print("\n" + "="*60)
+    print("Please select a threshold (recommended 0.75-0.80):")
+    print("="*60)
+    
+    # Show recommendations
+    print("Recommended thresholds:")
+    print("  0.75 - Medium (usually 2-3 labels)")
+    print("  0.78 - Strict (usually 1-2 labels)")
+    print("  0.80 - Very strict (usually 0-1 labels)")
+    
+    # Get user input for threshold
+    while True:
+        try:
+            threshold_input = input("\nPlease enter threshold (e.g., 0.75): ")
+            THRESHOLD = float(threshold_input)
+            
+            if 0.5 <= THRESHOLD <= 1.0:
+                break
+            else:
+                print("❌ Threshold must be between 0.5 and 1.0")
+        except ValueError:
+            print("❌ Please enter a valid number")
+    
+    print(f"\n📊 Using threshold: {THRESHOLD}")
+    
+    # 6. Show example predictions
+    examples = [
+        "This game has beautiful graphics and great music",
+        "Price is a bit high, but the gameplay is decent",
+        "User interface needs improvement, operation is not smooth enough"
+    ]
+    show_example_predictions(classifier, examples, THRESHOLD)
+    
+    # 7. Confirm to continue
+    confirm = input("\nProcess all data with this threshold? (y/n): ").lower()
+    if confirm != 'y':
+        print("Program exited")
+        return
+    
+    # 8. Process all data
+    print(f"\nProcessing all data (threshold={THRESHOLD})...")
+    all_results = []
+    
+    for i, row in df.iterrows():
+        text = str(row['clean_text']).strip()
+        
+        # Predict labels
+        labels, scores = classifier.predict(text, threshold=THRESHOLD)
+        
+        # Store result
+        result = {
+            'Index': i + 1,
+            'Text Preview': text[:80] + "..." if len(text) > 80 else text,
+            'Label Count': len(labels),
+            'Labels': " | ".join(labels),
+            'Scores': " | ".join([f"{s:.3f}" for s in scores])
+        }
+        
+        # Add details for top 3 labels
+        for j in range(3):
+            if j < len(labels):
+                result[f'Label {j+1}'] = labels[j]
+                result[f'Score {j+1}'] = f"{scores[j]:.3f}"
+            else:
+                result[f'Label {j+1}'] = ""
+                result[f'Score {j+1}'] = ""
+        
+        all_results.append(result)
+        
+        # Show progress
+        if (i + 1) % 20 == 0:
+            print(f"  Processed {i+1}/{len(df)} records")
+    
+    # 9. Save results
+    results_df = pd.DataFrame(all_results)
+    filename = f'predictions_threshold_{THRESHOLD:.2f}.csv'
+    results_df.to_csv(filename, index=False, encoding='utf-8-sig')
+    print(f"\n✅ Results saved to: {filename}")
+    
+    # 10. Show statistics
+    print("\n" + "="*60)
+    print("Statistics")
+    print("="*60)
+    
+    total_texts = len(df)
+    avg_labels = results_df['Label Count'].mean()
+    print(f"Total texts: {total_texts}")
+    print(f"Average labels per text: {avg_labels:.2f}")
+    
+    # Label count distribution
+    print("\nLabel count distribution:")
+    label_dist = results_df['Label Count'].value_counts().sort_index()
+    for num_labels, count in label_dist.items():
+        percentage = (count / total_texts) * 100
+        print(f"  {num_labels} labels: {count:>3} records ({percentage:>5.1f}%)")
+    
+    # Most common labels
+    print("\nTop 10 most common labels:")
+    label_counts = {}
+    for labels_str in results_df['Labels']:
+        if labels_str:
+            for label in labels_str.split(" | "):
+                label_counts[label] = label_counts.get(label, 0) + 1
+    
+    if label_counts:
+        sorted_labels = sorted(label_counts.items(), key=lambda x: x[1], reverse=True)
+        for i, (label, count) in enumerate(sorted_labels[:10], 1):
+            percentage = (count / total_texts) * 100
+            short_label = label.split("::")[-1][:35]
+            print(f"  {i:2d}. {short_label:<35} {count:>3}x ({percentage:>5.1f}%)")
+    
+    # 11. Threshold adjustment suggestions
+    print("\n" + "="*60)
+    print("Threshold Adjustment Suggestions")
+    print("="*60)
+    
+    if avg_labels > 3:
+        print(f"Current average {avg_labels:.1f} labels/text - may be too many")
+        print(f"Consider raising threshold to {THRESHOLD + 0.03:.2f}")
+    elif avg_labels < 1:
+        print(f"Current average {avg_labels:.1f} labels/text - may be too few")
+        print(f"Consider lowering threshold to {THRESHOLD - 0.03:.2f}")
+    else:
+        print(f"Current average {avg_labels:.1f} labels/text - seems appropriate")
+    
+    # 12. Retry option
+    print("\n" + "="*60)
+    retry = input("Run again with different threshold? (y/n): ").lower()
+    
+    if retry == 'y':
+        print("\nRerunning program...")
+        main()  # Recursively rerun
+    else:
+        print("\nProgram ended")
+
+if __name__ == "__main__":
+    main()
